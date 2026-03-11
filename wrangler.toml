@@ -1,3 +1,0 @@
-name = "logistics-report-bot"
-main = "bot.py"
-compatibility_date = "2024-01-01"
