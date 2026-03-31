@@ -381,8 +381,8 @@ def main_menu_keyboard():
 
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 if not GOOGLE_CREDENTIALS_JSON:
-    with open("credentials.json", "r") as f:
-        GOOGLE_CREDENTIALS_JSON = f.read()
+    raise ValueError("❌ GOOGLE_CREDENTIALS_JSON environment variable is required! "
+                     "Please set it in Railway Variables.")
 
 sheets = SheetsManager(
     credentials_json=GOOGLE_CREDENTIALS_JSON,
