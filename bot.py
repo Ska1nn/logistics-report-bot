@@ -110,11 +110,41 @@ class SheetsManager:
         sheet = self.client.open_by_key(self.data_sheet_id).sheet1
         headers = sheet.row_values(1)
 
-        row = []
-        for header in headers:
-            value = self._get_value_for_header(header, answers)
-            row.append(str(value) if value is not None else "")
+        format_work = answers.get("Формат работы", "")
+        is_hourly = "час" in format_work.lower()
+        is_trip = "рейс" in format_work.lower()
 
+        material_value = "Услуги перевозки (час)" if is_hourly else "Услуги перевозки"
+
+        hours_value = answers.get("Часы", "") if is_hourly else ""
+        weight_value = ""
+        unit = answers.get("Единица измерения")
+
+        if not is_hourly and not is_trip:
+            if unit == "тонна":
+                weight_value = answers.get("Вес (в тоннах)", "")
+            elif unit == "м³":
+                weight_value = answers.get("Вес (в кубах)", "")
+
+        record = {
+            "Дата операции": answers.get("Дата", ""),
+            "Статья ДДС": "Услуги перевозки (час)" if is_hourly else "Услуги перевозки",
+            "Авто": answers.get("Авто", ""),
+            "Кол-во рейсов": "" if is_hourly else answers.get("Кол-во рейсов", ""),
+            "Часы": hours_value,
+            "Контрагент": answers.get("Контрагент", ""),
+            "Материал": material_value,
+            "Объект": answers.get("Объект", ""),
+            "Комментарий": answers.get("Комментарий", ""),
+            "Цена": answers.get("Цена", ""),
+            "Вес (тонна)": weight_value if unit == "тонна" else "",
+            "Вес (куб)": hours_value if is_hourly else (weight_value if unit == "м³" else ""),
+            "Тип операции": "Поступления",
+            "Месяц операции": "",
+            "Год операции": ""
+        }
+
+        row = [record.get(h, "") for h in headers]
         self._append_row_safe(sheet, row)
 
     def _save_pair_operation(self, answers: dict):
@@ -162,9 +192,17 @@ class SheetsManager:
         self._append_row_safe(sheet, [sale.get(h, "") for h in headers])
 
     def _get_value_for_header(self, header: str, answers: dict) -> str:
+        if header == "Статья ДДС":
+            fmt = answers.get("Формат работы", "")
+            if "час" in fmt.lower():
+                return "Услуги перевозки (час)"
+            elif "перевозка" in fmt.lower():
+                return "Услуги перевозки"
+            else:
+                return fmt
+
         mapping = {
             "Дата операции": "Дата",
-            "Статья ДДС": "Формат работы",
             "Авто": "Авто",
             "Кол-во рейсов": "Кол-во рейсов",
             "Контрагент": "Контрагент",
@@ -249,7 +287,6 @@ def get_steps_sequence(format_work: str = None):
             {"name": "Вес (продажа)", "type": "number"},
             {"name": "Комментарий", "type": "text"},
         ]
-
     elif "час" in format_work.lower():
         return base_steps + [
             auto_step,
@@ -258,18 +295,30 @@ def get_steps_sequence(format_work: str = None):
             {"name": "Часы", "type": "number"},
             comment_step
         ]
-
-    else:
+    elif "рейс" in format_work.lower():
         return base_steps + [
             auto_step,
             {"name": "Кол-во рейсов", "type": "number"},
             {"name": "Контрагент", "type": "reference", "ref_key": "Контрагент"},
             {"name": "Объект", "type": "reference", "ref_key": "Объект"},
-            {"name": "Единица измерения", "type": "choice", "options": ["тонна", "м³"]},
-            {"name": "Вес", "type": "number"},
             comment_step
         ]
+    else:
+        if "тонн" in format_work.lower():
+            weight_step_name = "Вес (в тоннах)"
+        elif "куб" in format_work.lower():
+            weight_step_name = "Вес (в кубах)"
+        else:
+            weight_step_name = "Вес"
 
+        return base_steps + [
+            auto_step,
+            {"name": "Кол-во рейсов", "type": "number"},
+            {"name": "Контрагент", "type": "reference", "ref_key": "Контрагент"},
+            {"name": "Объект", "type": "reference", "ref_key": "Объект"},
+            {"name": weight_step_name, "type": "number"},
+            comment_step
+        ]
 
 def get_step_description(step_name: str, answers: dict) -> str:
     descriptions = {
@@ -286,7 +335,9 @@ def get_step_description(step_name: str, answers: dict) -> str:
         "Объект продаж": "Укажите объект доставки",
         "Единица измерения (продажа)": "Выберите единицу измерения для продажи",
         "Вес (продажа)": "Введите вес продажи",
-        "Комментарий": "Добавьте комментарий (необязательно)"
+        "Комментарий": "Добавьте комментарий (необязательно)",
+        "Вес (в тоннах)": "Введите вес в тоннах",
+        "Вес (в кубах)": "Введите вес в кубах"
     }
     return descriptions.get(step_name, f"Заполните поле: {step_name}")
 
@@ -355,7 +406,7 @@ async def ask_current_step(message: Message, state: FSMContext):
     ref_data = data.get("ref_data", {})
 
     summary = build_summary(answers)
-    report_block = f"📋 *Текущий отчёт:*\n{summary}\n\n"
+    report_block = f"📋 Текущий отчёт:\n{summary}\n\n"
 
     if index >= len(steps):
         await show_final_report(message, state)
@@ -368,7 +419,7 @@ async def ask_current_step(message: Message, state: FSMContext):
 
     description = get_step_description(step_name, answers)
     msg_text = report_block
-    msg_text += f"Шаг {index + 1} из {len(steps)}: *{step_name}*\n{description}"
+    msg_text += f"Шаг {index + 1} из {len(steps)}: {step_name}\n{description}"
     if current_answer:
         msg_text += f"\n\nТекущий ответ: `{current_answer}`"
     msg_text += "\n\n"
@@ -388,19 +439,18 @@ async def ask_current_step(message: Message, state: FSMContext):
         buttons.append(action_row)
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         msg_text += "Выберите дату:"
-        await message.answer(msg_text, reply_markup=kb, parse_mode="Markdown")
+        await message.answer(msg_text, reply_markup=kb)
 
     elif step_type == "choice":
         options = step["options"]
         buttons = [[InlineKeyboardButton(text=opt, callback_data=f"step:{opt}")] for opt in options]
-        action_row = []
+        
         if index > 0:
-            action_row.append(InlineKeyboardButton(text=back_btn, callback_data="nav:back"))
-        action_row.append(InlineKeyboardButton(text=skip_btn, callback_data="step:__SKIP__"))
-        buttons.append(action_row)
+            buttons.append([InlineKeyboardButton(text=back_btn, callback_data="nav:back")])
+        
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         msg_text += "Выберите вариант:"
-        await message.answer(msg_text, reply_markup=kb, parse_mode="Markdown")
+        await message.answer(msg_text, reply_markup=kb)
 
     elif step_type == "reference":
         ref_key = step["ref_key"]
@@ -425,7 +475,7 @@ async def ask_current_step(message: Message, state: FSMContext):
         nav_row.append(InlineKeyboardButton(text=skip_btn, callback_data="step:__SKIP__"))
         buttons.append(nav_row)
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await message.answer(f"{msg_text}Выберите:", reply_markup=kb, parse_mode="Markdown")
+        await message.answer(f"{msg_text}Выберите:", reply_markup=kb)
 
     else:
         keyboard = []
@@ -435,7 +485,7 @@ async def ask_current_step(message: Message, state: FSMContext):
             keyboard.append([KeyboardButton(text=skip_btn)])
         kb = ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=False)
         msg_text += "Введите значение:"
-        await message.answer(msg_text, reply_markup=kb, parse_mode="Markdown")
+        await message.answer(msg_text, reply_markup=kb)
 
 
 async def show_final_report(message: Message, state: FSMContext):
@@ -449,7 +499,7 @@ async def show_final_report(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="❌ Отменить", callback_data="final:cancel")]
     ])
 
-    await message.answer(f"📋 *Полный отчёт:*\n{summary}", reply_markup=kb, parse_mode="Markdown")
+    await message.answer(f"📋 Полный отчёт:\n{summary}", reply_markup=kb)
 
 
 # =============================
@@ -469,7 +519,6 @@ async def start_form(message: Message, state: FSMContext):
     await state.update_data(steps=steps, current_step=0, answers={}, ref_data=ref_data)
     await ask_current_step(message, state)
 
-
 @router.callback_query(Form.filling, F.data == "nav:back")
 async def handle_back(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -486,7 +535,6 @@ async def handle_back(callback: CallbackQuery, state: FSMContext):
         await ask_current_step(callback.message, state)
     else:
         await callback.answer("Нельзя вернуться дальше", show_alert=True)
-
 
 @router.callback_query(Form.filling, F.data.startswith("step:"))
 async def handle_step_choice(callback: CallbackQuery, state: FSMContext):
@@ -505,10 +553,18 @@ async def handle_step_choice(callback: CallbackQuery, state: FSMContext):
     answers[step_name] = "" if value == "__SKIP__" else value
 
     if step_name == "Формат работы":
+        if "тонн" in value.lower():
+            answers["Единица измерения"] = "тонна"
+        elif "куб" in value.lower():
+            answers["Единица измерения"] = "м³"
+        else:
+            answers["Единица измерения"] = None
+
         new_sequence = get_steps_sequence(value)
         if len(new_sequence) < 3:
             await callback.message.answer("Ошибка: недостаточно шагов для этого формата.")
             return
+
         await state.update_data(
             answers=answers,
             current_step=2,
@@ -624,7 +680,7 @@ async def handle_edit_step(callback: CallbackQuery, state: FSMContext):
     ref_data = data.get("ref_data", {})
 
     description = get_step_description(step_name, data.get("answers", {}))
-    msg_text = f"Изменение шага: *{step_name}*\n{description}\n\n"
+    msg_text = f"Изменение шага: {step_name}\n{description}\n\n"
 
     if step_type == "date":
         today = datetime.today()
@@ -633,24 +689,30 @@ async def handle_edit_step(callback: CallbackQuery, state: FSMContext):
         buttons = [[InlineKeyboardButton(text=opt, callback_data=f"edit_save:{opt}")] for opt in options]
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         msg_text += "Выберите дату:"
-        await callback.message.answer(msg_text, reply_markup=kb, parse_mode="Markdown")
+        await callback.message.answer(msg_text, reply_markup=kb)
 
     elif step_type == "choice":
         options = step["options"]
         buttons = [[InlineKeyboardButton(text=opt, callback_data=f"edit_save:{opt}")] for opt in options]
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         msg_text += "Выберите вариант:"
-        await callback.message.answer(msg_text, reply_markup=kb, parse_mode="Markdown")
+        await callback.message.answer(msg_text, reply_markup=kb)
 
     elif step_type == "reference":
         ref_key = step["ref_key"]
         full_list = ref_data.get(ref_key, []) or ["(нет данных)"]
         items_to_show = full_list[:7]
-        buttons = [[InlineKeyboardButton(text=item, callback_data=f"edit_save:{item}")] for item in items_to_show]
+        
+        edit_ref_map = {str(i): name for i, name in enumerate(items_to_show)}
+        await state.update_data(edit_ref_map=edit_ref_map)
+        
+        buttons = []
+        for i, item in enumerate(items_to_show):
+            buttons.append([InlineKeyboardButton(text=item, callback_data=f"edit_save:{i}")])
+        
         buttons.append([InlineKeyboardButton(text="🔍 Поиск", callback_data="edit_search")])
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await callback.message.answer(f"{msg_text}Выберите:", reply_markup=kb, parse_mode="Markdown")
-        await state.update_data(counterparty_full_list=full_list, current_ref_key=ref_key)
+        await callback.message.answer(f"{msg_text}Выберите:", reply_markup=kb)
 
     else:
         await callback.message.answer(f"{msg_text}Введите новое значение:")
@@ -658,7 +720,12 @@ async def handle_edit_step(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(Form.filling, F.data.startswith("edit_save:"))
 async def handle_edit_save(callback: CallbackQuery, state: FSMContext):
-    new_value = callback.data.replace("edit_save:", "")
+    data = await state.get_data()
+    ref_id = callback.data.split(":", 1)[1]
+    
+    edit_ref_map = data.get("edit_ref_map", {})
+    new_value = edit_ref_map.get(ref_id, ref_id)
+    
     await _save_edited_value_and_return(callback.message, state, new_value)
 
 
@@ -678,13 +745,23 @@ async def handle_final_action(callback: CallbackQuery, state: FSMContext):
 
     elif action == "edit":
         data = await state.get_data()
-        steps = data["steps"]
+        steps = data.get("steps", [])
+        
+        if not steps:
+            await callback.message.answer("Ошибка: шаги не найдены.")
+            return
+
         buttons = []
         for i, step in enumerate(steps):
             name = step["name"]
             val = data["answers"].get(name, "")
             label = f"{name}: {val}" if val else name
             buttons.append([InlineKeyboardButton(text=label, callback_data=f"edit_step:{i}")])
+        
+        if not buttons:
+            await callback.message.answer("Нет шагов для редактирования.")
+            return
+
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         await state.update_data(editing_mode=True)
         await callback.message.edit_text("Выберите шаг для изменения:", reply_markup=kb)
@@ -710,9 +787,13 @@ async def handle_manual_input(message: Message, state: FSMContext):
         await message.answer("Пожалуйста, используйте кнопки под сообщением.")
         return
 
-    answers = data["answers"]
     step_name = steps[index]["name"]
 
+    if step_name == "Формат работы":
+        await message.answer("Пожалуйста, выберите формат из списка ниже.")
+        return
+
+    answers = data["answers"]
     text = message.text.strip()
     if text == "⬅ Назад":
         if index > 0:
@@ -770,6 +851,7 @@ async def handle_post_action(callback: CallbackQuery, state: FSMContext):
         data = await state.get_data()
         original = data.get("answers", {})
         format_work = original.get("Формат работы", "")
+        print("Format work for duplicate:", repr(format_work))
         await state.clear()
         await state.set_state(Form.filling)
         await state.update_data(
